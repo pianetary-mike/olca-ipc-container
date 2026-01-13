@@ -4,19 +4,8 @@ WORKDIR /olca-ipc
 COPY pom.xml .
 RUN mvn package
 
-# Native libraries stage - FORCE AMD64 since no ARM64 libs exist
-FROM --platform=linux/amd64 eclipse-temurin:21-jre AS native-downloader
-WORKDIR /tmp
-
-# Download x64 native libraries (only platform available)
-RUN apt-get update && apt-get install -y curl unzip && \
-    mkdir -p /app/native && \
-    echo "Downloading x64 native libraries..." && \
-    curl -fSL -o native.zip "https://github.com/GreenDelta/olca-native/releases/download/v0.0.1/olca-native-blas-linux-x64.zip" && \
-    unzip native.zip -d /tmp/extracted && \
-    find /tmp/extracted -name "*.so" -exec cp {} /app/native/ \; && \
-    rm -rf native.zip /tmp/extracted && \
-    echo "Native library contents:" && ls -la /app/native/
+# Use GreenDelta's official native libraries (compatible with olca-ipc 2.x)
+FROM ghcr.io/greendelta/gdt-server-native AS native-libs
 
 # Final image - FORCE AMD64
 FROM --platform=linux/amd64 eclipse-temurin:21-jre
@@ -35,14 +24,13 @@ RUN apt-get update && \
     echo "Installed libgfortran4:" && ldconfig -p | grep gfortran
 
 COPY --from=mvn /olca-ipc/target/lib /app/lib
-COPY --from=native-downloader /app/native /app/native
+COPY --from=native-libs /app/native /app/native
 COPY run.sh /app
 RUN chmod +x /app/run.sh
 
-# Verify native libraries can load
-RUN echo "=== Final native lib check ===" && ls -la /app/native/ && \
+# Verify native libraries
+RUN echo "=== Native lib contents ===" && ls -la /app/native/ && \
     echo "=== Checking library dependencies ===" && \
-    ldd /app/native/libopenblas64_.so && \
-    echo "=== All dependencies satisfied ===" || echo "WARNING: Some dependencies missing"
+    for f in /app/native/*.so; do echo "--- $f ---"; ldd "$f" 2>/dev/null || true; done
 
 ENTRYPOINT ["/app/run.sh"]
