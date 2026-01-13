@@ -4,33 +4,31 @@ WORKDIR /olca-ipc
 COPY pom.xml .
 RUN mvn package
 
-# Use GreenDelta's official native libraries (compatible with olca-ipc 2.x)
-FROM ghcr.io/greendelta/gdt-server-native AS native-libs
+# Native libraries stage - download UMFPACK (newer, better compatibility)
+FROM --platform=linux/amd64 eclipse-temurin:21-jre AS native-downloader
+WORKDIR /tmp
+
+# Download UMFPACK native libraries (not BLAS - UMFPACK has better compatibility)
+RUN apt-get update && apt-get install -y curl unzip && \
+    mkdir -p /app/native/olca-native/0.0.1/x64 && \
+    echo "Downloading UMFPACK native libraries..." && \
+    curl -fSL -o native.zip "https://github.com/GreenDelta/olca-native/releases/download/v0.0.1/olca-native-umfpack-linux-x64.zip" && \
+    unzip native.zip -d /app/native/olca-native/0.0.1/x64/ && \
+    rm native.zip && \
+    echo "Native library contents:" && find /app/native -name "*.so" -exec ls -la {} \;
 
 # Final image - FORCE AMD64
 FROM --platform=linux/amd64 eclipse-temurin:21-jre
 WORKDIR /app
 
-# Install libgfortran4 which is required by OpenBLAS (compiled with GCC 7)
-# Ubuntu 22.04 (jammy) doesn't have libgfortran4, need to get from Ubuntu 20.04 (focal)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends software-properties-common && \
-    echo "deb http://archive.ubuntu.com/ubuntu focal main universe" > /etc/apt/sources.list.d/focal.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends libgfortran4 && \
-    rm /etc/apt/sources.list.d/focal.list && \
-    apt-get update && \
-    rm -rf /var/lib/apt/lists/* && \
-    echo "Installed libgfortran4:" && ldconfig -p | grep gfortran
-
 COPY --from=mvn /olca-ipc/target/lib /app/lib
-COPY --from=native-libs /app/native /app/native
+COPY --from=native-downloader /app/native /app/native
 COPY run.sh /app
 RUN chmod +x /app/run.sh
 
 # Verify native libraries
-RUN echo "=== Native lib contents ===" && ls -la /app/native/ && \
+RUN echo "=== Native lib structure ===" && find /app/native -type f && \
     echo "=== Checking library dependencies ===" && \
-    for f in /app/native/*.so; do echo "--- $f ---"; ldd "$f" 2>/dev/null || true; done
+    find /app/native -name "*.so" -exec sh -c 'echo "--- {} ---"; ldd "{}" 2>/dev/null || true' \;
 
 ENTRYPOINT ["/app/run.sh"]
